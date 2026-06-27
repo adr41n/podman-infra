@@ -1,0 +1,21 @@
+# This directory (~/Podman = /KoolApps/Podman) holds LIVE service data for several
+# containers (Plex library/database, Home Assistant, Pi-hole, Syncthing, RustDesk)
+# plus runtime logs. None of that should be committed.
+#
+# Strategy: deny everything by default, then whitelist only the Plex health-check
+# system files. To track a new file you must add an explicit "!" rule below.
+
+# Ignore everything at the repo root...
+/*
+
+# ...then re-include the health-check system:
+!/.gitignore
+!/PLEX-HEALTHCHECK.md
+!/plex-healthcheck.sh
+!/plex-report-clear.sh
+
+# Allow descending into Plex/ to track only the deployed Quadlet copy,
+# while still ignoring the live Plex config/database it contains.
+!/Plex/
+/Plex/*
+!/Plex/plex.container
