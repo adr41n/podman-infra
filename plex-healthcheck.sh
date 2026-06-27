@@ -39,12 +39,17 @@ REPORT_FILE="${PLEX_HEALTH_REPORT:-$HOME/Podman/plex-healthcheck-report.log}"
 RESTART_MODE="${PLEX_RESTART_MODE:-auto}"
 SYSTEMD_UNIT="${PLEX_SYSTEMD_UNIT:-plex.service}"
 SYSTEMCTL_SCOPE="${PLEX_SYSTEMCTL_SCOPE:---user}"      # "--user" (rootless) or "" (system)
+# Parse the scope string into an array: "--user" yields one arg; an empty value
+# (system scope) yields zero args. The array expansion used below is correct in
+# both cases without relying on unquoted word-splitting (avoids SC2086).
+read -ra SYSTEMCTL_SCOPE_ARR <<< "$SYSTEMCTL_SCOPE"
 
 PLEX_URL="http://${PLEX_HOST}:${PLEX_PORT}${HEALTH_PATH}"
 
 # ---- Logging -------------------------------------------------------------
 log() {
-    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+    local msg
+    msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
     if [ -n "$LOG_FILE" ]; then
         echo "$msg" | tee -a "$LOG_FILE"
     else
@@ -89,7 +94,7 @@ plex_responding() {
 
 # True if the configured systemd unit is known to the (user) manager.
 unit_exists() {
-    [ "$(systemctl $SYSTEMCTL_SCOPE show "$SYSTEMD_UNIT" --property=LoadState --value 2>/dev/null)" = "loaded" ]
+    [ "$(systemctl "${SYSTEMCTL_SCOPE_ARR[@]}" show "$SYSTEMD_UNIT" --property=LoadState --value 2>/dev/null)" = "loaded" ]
 }
 
 restart_plex() {
@@ -97,7 +102,7 @@ restart_plex() {
     # 'podman restart' fails once the container is gone; restart via systemd.
     if [ "$RESTART_MODE" = "systemd" ] || { [ "$RESTART_MODE" = "auto" ] && unit_exists; }; then
         log "Restarting via systemd unit '${SYSTEMD_UNIT}' (systemctl ${SYSTEMCTL_SCOPE})..."
-        if systemctl $SYSTEMCTL_SCOPE restart "$SYSTEMD_UNIT"; then
+        if systemctl "${SYSTEMCTL_SCOPE_ARR[@]}" restart "$SYSTEMD_UNIT"; then
             log "systemctl restart issued for '${SYSTEMD_UNIT}'."
             return 0
         fi
