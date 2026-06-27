@@ -1,0 +1,111 @@
+# Podman Plex — Health-Check & Auto-Restart
+
+Automation that keeps the rootless-[Podman](https://podman.io/) **Plex Media Server**
+container (`plex`) running on this host: it recovers Plex automatically when the
+container stops **or** stops responding, and logs every recovery.
+
+This README focuses on the **automation** and the **recovery process**. The full
+reference — every configuration variable, troubleshooting, and uninstall steps —
+is in [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md).
+
+## Components
+| File | Role |
+| --- | --- |
+| `plex-healthcheck.sh` | Health probe + restart/report logic (runs every 5 min). |
+| `plex-report-clear.sh` | Truncates the recovery report log (runs monthly). |
+| `Plex/plex.container` | Tracked copy of the Quadlet unit that defines the `plex` container. The live unit is `~/.config/containers/systemd/plex.container`. |
+| `plex-healthcheck-report.log` | Runtime recovery log — one line per reset (not tracked in git). |
+
+Everything runs as the `adrian` user via the **systemd user manager**, with
+lingering enabled (`loginctl enable-linger adrian`) so the timers run even when
+no one is logged in. The unit/timer files live under `~/.config/systemd/user/`
+and `~/.config/containers/systemd/`.
+
+## Recovery process (two independent layers)
+Recovery does **not** rely on a single mechanism:
+
+1. **systemd `Restart=always` — primary, ~10 s.**
+   The Quadlet unit sets `Restart=always` with `RestartSec=10`, so systemd
+   restarts the container within ~10 seconds of *any* exit, crash, or failed
+   start — including the first attempt after a reboot.
+2. **Health-check timer — backstop, every 5 min.**
+   `plex-healthcheck.sh` catches what systemd cannot see: a container that is
+   *running but unresponsive*. Plex is considered healthy only when **both** are
+   true:
+   - the `plex` container is running (`podman ps`), and
+   - Plex answers `HTTP 200` on `http://127.0.0.1:32400/identity` (no auth).
+
+   If either check fails, it restarts Plex via `systemctl --user restart
+   plex.service`, waits up to ~60 s for it to respond, then appends one line to
+   the report log.
+
+```mermaid
+flowchart LR
+  Crash["Plex exits / crashes /<br/>fails to start"] --> SD["systemd Restart=always<br/>restart within ~10s"]
+  SD --> Up["plex running"]
+  Timer["Health-check timer<br/>every 5 min"] --> Chk{"running AND<br/>/identity = 200?"}
+  Chk -- yes --> OK["healthy — no action,<br/>nothing logged"]
+  Chk -- "no (e.g. hung)" --> R["systemctl --user<br/>restart plex.service"]
+  R --> Wait{"responds<br/>within ~60s?"}
+  Wait -- yes --> Rec["log RECOVERED"]
+  Wait -- no --> Fail["log FAILED-RECOVERY"]
+```
+
+### Why it restarts via systemd (not `podman restart`)
+The container is **Quadlet-managed** and runs with auto-remove, so it is *deleted*
+when it stops — a plain `podman restart plex` fails once the container is gone.
+Always control it through systemd:
+
+```bash
+systemctl --user restart plex.service
+```
+
+## Automation (systemd user timers)
+| Timer | Schedule | Runs |
+| --- | --- | --- |
+| `plex-healthcheck.timer` | every 5 min (`OnCalendar=*:0/5`) | `plex-healthcheck.sh` |
+| `plex-report-clear.timer` | monthly | `plex-report-clear.sh` |
+
+Both use `Persistent=true`, so a run missed while the host was off executes at the
+next opportunity.
+
+## Recovery report log
+A line is appended to `plex-healthcheck-report.log` **only when Plex is reset**;
+healthy runs write nothing there (their play-by-play goes to the journal). Each
+entry is `key=value`:
+
+```text
+2026-06-27 18:23:10 +0100  RESET  result=RECOVERED  reason="container 'plex' not running"  attempts=4  duration=18s  host=KoolApps
+```
+
+`result` is one of `RECOVERED`, `FAILED-RECOVERY`, or `FAILED-RESTART`. The monthly
+clear truncates the file to its header plus a `# Cleared: <timestamp>` line.
+
+## Common operations
+```bash
+# Timer status / schedule
+systemctl --user list-timers 'plex-*'
+
+# Run a health check now (restarts Plex if needed)
+systemctl --user start plex-healthcheck.service
+
+# Follow the health-check log live
+journalctl --user -u plex-healthcheck.service -f
+
+# View the recovery report
+cat plex-healthcheck-report.log
+
+# Confirm systemd's primary auto-restart is in effect
+systemctl --user show plex.service -p Restart      # -> Restart=always
+```
+
+## Editing the Quadlet
+`Plex/plex.container` in this repo is a **copy** kept under version control. The
+unit systemd actually loads is `~/.config/containers/systemd/plex.container`.
+After editing the live unit, reload the manager:
+
+```bash
+systemctl --user daemon-reload
+```
+
+Keep the repo copy and the live unit in sync.
