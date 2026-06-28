@@ -8,6 +8,13 @@ This README focuses on the **automation** and the **recovery process**. The full
 reference — every configuration variable, troubleshooting, and uninstall steps —
 is in [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md).
 
+## Getting Started
+1. **Clone** this repo: `git clone https://github.com/adr41n/podman-plex-healthcheck.git`
+2. **Deploy Plex** from the Quadlet template — see [Deploying / editing the Quadlet](#deploying--editing-the-quadlet).
+3. **Install the health check**: place `plex-healthcheck.sh` and `plex-report-clear.sh` (e.g. in `~/Podman`) and add the systemd user timers documented in [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md), then enable them with lingering:
+   `systemctl --user enable --now plex-healthcheck.timer plex-report-clear.timer && loginctl enable-linger "$USER"`
+4. **Verify**: `systemctl --user list-timers 'plex-*'` (and `systemctl --user show plex.service -p Restart` should print `Restart=always`).
+
 ## Components
 | File | Role |
 | --- | --- |
