@@ -87,6 +87,13 @@ Three user-level cron jobs complement the systemd timers above:
 
 View or edit with `crontab -e`; verify with `crontab -l`.
 
+### Verification (2026-06-28)
+All three jobs were verified in production on `KoolApps`:
+- **CheckRequests** — confirmed firing every 5 min without gaps from `10:25` to `18:35+`; dispatch logic tested: correctly ignores requests when an `-Active` flag is present and consumes the request file when not.
+- **SaveHome** — confirmed dispatched at `18:36 BST` in response to a request file; execution confirmed via `/KoolApps/home/sudo-crontab.txt` being written at that timestamp.
+- **ClearSaveHomeLog** — not yet due (next run: 1 July at 05:55); schedule verified in crontab.
+- A 24-test bash suite (`test-cron-jobs.sh`) covers schedule correctness, script permissions/syntax, `ClearSaveHomeLog` cleanup logic, `CheckRequests` dispatch logic, and `SaveHome`'s flag-file guard — all tests pass.
+
 ## Recovery report log
 A line is appended to `plex-healthcheck-report.log` **only when Plex is reset**;
 healthy runs write nothing there (their play-by-play goes to the journal). Each
