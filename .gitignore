@@ -15,8 +15,9 @@
 !/plex-healthcheck.sh
 !/plex-report-clear.sh
 
-# Allow descending into Plex/ to track only the deployed Quadlet copy,
-# while still ignoring the live Plex config/database it contains.
+# Allow descending into Plex/ to track only the sanitized Quadlet TEMPLATE,
+# while ignoring the live Plex config/database AND any real plex.container
+# (the host-specific unit contains private addresses and must never be committed).
 !/Plex/
 /Plex/*
-!/Plex/plex.container
+!/Plex/plex.container.example

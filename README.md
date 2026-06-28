@@ -13,7 +13,7 @@ is in [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md).
 | --- | --- |
 | `plex-healthcheck.sh` | Health probe + restart/report logic (runs every 5 min). |
 | `plex-report-clear.sh` | Truncates the recovery report log (runs monthly). |
-| `Plex/plex.container` | Tracked copy of the Quadlet unit that defines the `plex` container. The live unit is `~/.config/containers/systemd/plex.container`. |
+| `Plex/plex.container.example` | Sanitized **template** of the Quadlet unit. Copy it to `~/.config/containers/systemd/plex.container` and fill in the placeholders. The real, host-specific unit is intentionally **not** tracked. |
 | `plex-healthcheck-report.log` | Runtime recovery log — one line per reset (not tracked in git). |
 
 Everything runs as the `adrian` user via the **systemd user manager**, with
@@ -99,13 +99,17 @@ cat plex-healthcheck-report.log
 systemctl --user show plex.service -p Restart      # -> Restart=always
 ```
 
-## Editing the Quadlet
-`Plex/plex.container` in this repo is a **copy** kept under version control. The
-unit systemd actually loads is `~/.config/containers/systemd/plex.container`.
-After editing the live unit, reload the manager:
+## Deploying / editing the Quadlet
+This repo ships a **sanitized template**, [`Plex/plex.container.example`](./Plex/plex.container.example),
+rather than a real unit — the live unit is host-specific (private addresses, a
+claim token) and is intentionally **not** tracked. To deploy:
 
 ```bash
+mkdir -p ~/.config/containers/systemd
+cp Plex/plex.container.example ~/.config/containers/systemd/plex.container
+# edit the copy: set TZ, your volume paths, and PLEX_CLAIM (first run only)
 systemctl --user daemon-reload
+systemctl --user start plex
 ```
 
-Keep the repo copy and the live unit in sync.
+After any later edit to the live unit, re-run `systemctl --user daemon-reload`.

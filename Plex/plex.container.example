@@ -1,0 +1,71 @@
+# Plex via Podman Quadlet (systemd) — TEMPLATE
+#
+# This is a sanitized example. Copy it to your rootless Quadlet directory,
+# replace every <PLACEHOLDER> and the example paths, then reload and start:
+#
+#   mkdir -p ~/.config/containers/systemd
+#   cp plex.container.example ~/.config/containers/systemd/plex.container
+#   $EDITOR ~/.config/containers/systemd/plex.container
+#   systemctl --user daemon-reload
+#   systemctl --user start plex
+#
+# To run without an active login session (timers/containers survive logout):
+#   loginctl enable-linger "$USER"
+
+[Unit]
+Description=Plex container
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=lscr.io/linuxserver/plex
+ContainerName=plex
+AutoUpdate=registry
+
+# Map the host user to the same UID/GID inside the container so bind-mounted
+# files stay owned by your user (rootless Podman). See PUID/PGID below.
+UserNS=keep-id
+
+# Host networking: Plex binds port 32400 directly on the host, so no
+# PublishPort mapping is required.
+Network=host
+
+# ---------------------------------------------------------------------------
+# REMOTE ACCESS (optional) — replace the placeholders with your own addresses:
+#   LAN:        http://<LAN-IP>:32400         (e.g. 192.168.x.x)
+#   Tailscale:  http://<TAILSCALE-IP>:32400   (100.x.y.z tailnet address)
+#   Direct WAN: forward TCP 32400 -> <LAN-IP> on your router (public IP
+#               <PUBLIC-IP>), or just use Tailscale. If Plex Web keeps turning
+#               "Publish server on Plex" OFF because no public port is
+#               reachable, a small re-assert timer can keep it enabled.
+# ---------------------------------------------------------------------------
+
+Environment=VERSION=latest
+Environment=PUID=1000
+Environment=PGID=1000
+# Timezone in tzdata "Area/City" form; change to your zone (e.g. Europe/London).
+Environment=TZ=UTC
+# First-run only: claim token from https://www.plex.tv/claim (valid ~4 minutes)
+# to link a brand-new server to your account. Uncomment + set for the very
+# first start, then remove it once the server is claimed.
+#Environment=PLEX_CLAIM=claim-xxxxxxxxxxxxxxxxxxxx
+
+# Bind mounts — adjust to your own config + media locations. "%h" = your home.
+Volume=%h/Podman/Plex/config:/config
+Volume=/path/to/TV:/data/tvshows
+Volume=/path/to/Movies:/data/movies
+Volume=/path/to/Music:/data/music
+Volume=/path/to/Photos:/data/photos
+# Transcoder scratch dir; point Plex's "Transcoder temporary directory" here.
+Volume=/path/to/transcode:/transcode
+
+[Service]
+# NOTE: 'unless-stopped' is a Podman/Docker value that systemd CANNOT parse.
+# Use the systemd-native 'always' so the container is auto-restarted on any
+# exit, crash, or failed start; an explicit 'systemctl --user stop plex' still
+# stops it and keeps it stopped.
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
