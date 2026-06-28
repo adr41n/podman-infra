@@ -10,6 +10,7 @@
 
 # ...then re-include the health-check system:
 !/.gitignore
+!/LICENSE
 !/README.md
 !/PLEX-HEALTHCHECK.md
 !/plex-healthcheck.sh

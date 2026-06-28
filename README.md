@@ -113,3 +113,6 @@ systemctl --user start plex
 ```
 
 After any later edit to the live unit, re-run `systemctl --user daemon-reload`.
+
+## License
+Released under the [MIT License](./LICENSE) © 2026 adr41n.
