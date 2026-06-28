@@ -15,6 +15,7 @@
 !/PLEX-HEALTHCHECK.md
 !/plex-healthcheck.sh
 !/plex-report-clear.sh
+!/test-cron-jobs.sh
 
 # Allow descending into Plex/ to track only the sanitized Quadlet TEMPLATE,
 # while ignoring the live Plex config/database AND any real plex.container

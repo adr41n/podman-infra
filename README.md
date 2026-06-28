@@ -76,6 +76,17 @@ systemctl --user restart plex.service
 Both use `Persistent=true`, so a run missed while the host was off executes at the
 next opportunity.
 
+## Cron jobs
+Three user-level cron jobs complement the systemd timers above:
+
+| Schedule | Command | Purpose |
+| --- | --- | --- |
+| Every 5 min | `~/bin_local/CheckRequests` | Polls for pending requests. |
+| Daily at 06:00 | `~/bin_local/SaveHome` | Daily Home Assistant backup. |
+| 1st of month at 05:55 | `~/bin_local/ClearSaveHomeLog` | Clears the SaveHome log before the day's backup run. |
+
+View or edit with `crontab -e`; verify with `crontab -l`.
+
 ## Recovery report log
 A line is appended to `plex-healthcheck-report.log` **only when Plex is reset**;
 healthy runs write nothing there (their play-by-play goes to the journal). Each
