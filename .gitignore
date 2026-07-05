@@ -23,3 +23,11 @@
 !/Plex/
 /Plex/*
 !/Plex/plex.container.example
+
+# Allow descending into Dispatcher/ to track the compose file and the sanitized
+# systemd user-service TEMPLATE (rootless podman-compose). The live unit lives in
+# ~/.config/systemd/user/ and is never committed.
+!/Dispatcher/
+/Dispatcher/*
+!/Dispatcher/docker-compose.yml
+!/Dispatcher/dispatcharr-compose.service.example

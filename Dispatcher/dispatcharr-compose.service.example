@@ -1,0 +1,33 @@
+# Dispatcharr rootless stack via podman-compose (systemd user service) — TEMPLATE
+#
+# This is a sanitized example. Copy it to your rootless systemd user directory,
+# adjust the paths if your compose file lives elsewhere, then reload and start:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp dispatcharr-compose.service.example ~/.config/systemd/user/dispatcharr-compose.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now dispatcharr-compose.service
+#
+# To run without an active login session (survives logout/reboot):
+#   loginctl enable-linger "$USER"
+#
+# Requires podman-compose and a docker-compose.yml in %h/Podman/Dispatcher.
+# Named dispatcharr-compose.service (not dispatcharr.service) to avoid colliding
+# with a Quadlet-generated <name>.service, should you migrate to a Quadlet later.
+
+[Unit]
+Description=Dispatcharr rootless stack (managed via podman-compose)
+Documentation=file:%h/Podman/Dispatcher/docker-compose.yml
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/Podman/Dispatcher
+ExecStart=/usr/bin/podman-compose -f %h/Podman/Dispatcher/docker-compose.yml up -d
+ExecStop=/usr/bin/podman-compose -f %h/Podman/Dispatcher/docker-compose.yml down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
