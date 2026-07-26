@@ -18,11 +18,16 @@
 !/test-cron-jobs.sh
 
 # Allow descending into Plex/ to track only the sanitized Quadlet TEMPLATE,
-# while ignoring the live Plex config/database AND any real plex.container
+# REMOTE-ACCESS.md (troubleshooting reference), and system service files.
+# Ignores the live Plex config/database AND any real plex.container
 # (the host-specific unit contains private addresses and must never be committed).
 !/Plex/
 /Plex/*
 !/Plex/plex.container.example
+!/Plex/REMOTE-ACCESS.md
+!/Plex/plex-novpn.sh
+!/Plex/plex-nat-loopback.service
+!/Plex/99-plex-nat.conf
 
 # Allow descending into Dispatcher/ to track the compose file and the sanitized
 # systemd user-service TEMPLATE (rootless podman-compose). The live unit lives in
