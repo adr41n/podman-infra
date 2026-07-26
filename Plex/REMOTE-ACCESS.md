@@ -99,10 +99,17 @@ This server has **no hardware GPU** (Matrox G200eW is a BMC display chip — not
 capable of video acceleration). All transcoding is CPU-only. To avoid buffering
 on remote streams:
 
-1. **On each remote Plex client:** Settings → Quality → Remote Streaming →
-   set to **8 Mbps 1080p** or lower. This ensures Plex transcodes the stream
-   to a bitrate the connection can sustain rather than attempting to deliver
-   full source quality (which can be 20–40 Mbps for HEVC).
+1. **Server-side cap (active):** `WanPerStreamMaxUploadRate=4000` (4 Mbps per stream),
+   `WanTotalMaxUploadRate=8000` (8 Mbps total). Set via Plex API 2026-07-26.
+   Verified: Samsung TV session dropped from 10.8 Mbps → 3.8 Mbps, playback
+   resumed without buffering. To adjust:
+   ```bash
+   PLEX_TOKEN=$(grep -oP 'PlexOnlineToken="\K[^"]+' \
+     "/home/adrian/Podman/Plex/config/Library/Application Support/Plex Media Server/Preferences.xml")
+   curl -X PUT "http://localhost:32400/:/prefs?WanPerStreamMaxUploadRate=4000&WanTotalMaxUploadRate=8000&X-Plex-Token=$PLEX_TOKEN"
+   ```
+2. **Per-client override:** Each Plex app → Settings → Quality → Remote Streaming
+   can be set independently. Server cap above is the hard ceiling.
 2. **Best option — join Tailscale:** Tailscale-connected devices get a direct
    P2P connection (`100.84.197.119:32400`) at LAN-equivalent speed, bypassing
    all relays. Install the Tailscale app and connect to `tuxedo-roach.ts.net`.
