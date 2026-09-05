@@ -121,6 +121,40 @@ Recovery does not rely on the health-check alone:
 > full library scan had queued chapter-thumbnail generation, saturating I/O on
 > the storage array.
 
+### Verification (2026-09-05)
+
+The fix was exercised against a fresh clone of `main` in an isolated harness: a
+container name that does not exist, `PLEX_RESTART_MODE=podman`, a fake
+`/identity` endpoint on an unused port, and temp report/lock files — so the live
+container, `plex.service` and the production report log were never touched.
+
+**Deployment.** All four unit templates are present in a clean clone, and the
+README's copy loop produces four correctly-named units, so the documented
+install completes end to end.
+
+**Behaviour — 14/14 checks passed:**
+
+- Restart fails, no recovery → exit `1`, `result=FAILED-RESTART`. Genuine
+  failures are still surfaced.
+- Restart fails but Plex recovers anyway → exit `0`,
+  `result=RECOVERED-AFTER-FAILED-RESTART`. This reproduces the 19:47/19:48
+  sequence above; before the fix it returned exit `1` and logged a false
+  `FAILED-RESTART`.
+- Concurrent run → exit `0`, skipped, no report entry. No restart storm.
+- Healthy → exit `0`, no report entry.
+
+**No collateral impact.** After testing, Plex still answered `HTTP 200`, the
+production report log still held only its two original entries, all four live
+units matched the shipped templates, and the timer was `active` with
+`Result=success`.
+
+> Scope caveat: the failed-restart path was triggered via `podman restart`
+> against a missing container, not a genuinely wedged `systemctl restart`. The
+> code path exercised is identical (`restart_plex()` returning non-zero), but
+> reproducing a real D-state hang would mean deliberately wedging live Plex.
+> The healthy-path check likewise points at the real container name while
+> probing the fake port, so it is a partial rather than pure simulation.
+
 ## Schedules
 
 | Timer | Schedule | `OnCalendar` |
