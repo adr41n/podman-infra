@@ -1,0 +1,40 @@
+# Plex health-check (systemd user service) — TEMPLATE
+#
+# This is a sanitized example. Copy it to your rootless systemd user directory,
+# then reload the manager:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp plex-healthcheck.service.example ~/.config/systemd/user/plex-healthcheck.service
+#   systemctl --user daemon-reload
+#
+# This unit is triggered by plex-healthcheck.timer (every 5 minutes) and has no
+# [Install] section, so it is not enabled directly — enable the timer instead:
+#
+#   systemctl --user enable --now plex-healthcheck.timer
+#
+# Run an immediate check on demand with:
+#
+#   systemctl --user start plex-healthcheck.service
+#
+# To run without an active login session (timers survive logout):
+#   loginctl enable-linger "$USER"
+#
+# Assumes plex-healthcheck.sh lives in %h/Podman. Adjust ExecStart if you place
+# it elsewhere.
+
+[Unit]
+Description=Plex (Podman) container health check and auto-restart
+Documentation=file:%h/Podman/plex-healthcheck.sh
+# Don't run while the network is clearly down.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/Podman/plex-healthcheck.sh
+# A container wedged in uninterruptible I/O must not let a run hang forever.
+# The script bounds its own restart command (PLEX_RESTART_TIMEOUT) and
+# serialises concurrent runs with a lock; this is the outer backstop.
+TimeoutStartSec=600
+# Output is timestamped by the script and captured by the journal:
+#   journalctl --user -u plex-healthcheck.service

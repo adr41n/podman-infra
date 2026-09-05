@@ -11,7 +11,7 @@ is in [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md).
 ## Getting Started
 1. **Clone** this repo: `git clone https://github.com/adr41n/podman-plex-healthcheck.git`
 2. **Deploy Plex** from the Quadlet template — see [Deploying / editing the Quadlet](#deploying--editing-the-quadlet).
-3. **Install the health check**: place `plex-healthcheck.sh` and `plex-report-clear.sh` (e.g. in `~/Podman`) and add the systemd user timers documented in [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md), then enable them with lingering:
+3. **Install the health check**: place `plex-healthcheck.sh` and `plex-report-clear.sh` (e.g. in `~/Podman`), copy `plex-healthcheck.service.example` to `~/.config/systemd/user/plex-healthcheck.service`, and add the timers documented in [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md), then enable them with lingering:
    `systemctl --user enable --now plex-healthcheck.timer plex-report-clear.timer && loginctl enable-linger "$USER"`
 4. **Verify**: `systemctl --user list-timers 'plex-*'` (and `systemctl --user show plex.service -p Restart` should print `Restart=always`).
 
@@ -20,6 +20,7 @@ is in [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md).
 | --- | --- |
 | `plex-healthcheck.sh` | Health probe + restart/report logic (runs every 5 min). |
 | `plex-report-clear.sh` | Truncates the recovery report log (runs monthly). |
+| `plex-healthcheck.service.example` | Sanitized **template** of the health-check service unit. Copy it to `~/.config/systemd/user/plex-healthcheck.service`. The live unit is **not** tracked. |
 | `Plex/plex.container.example` | Sanitized **template** of the Quadlet unit. Copy it to `~/.config/containers/systemd/plex.container` and fill in the placeholders. The real, host-specific unit is intentionally **not** tracked. |
 | `plex-healthcheck-report.log` | Runtime recovery log — one line per reset (not tracked in git). |
 
@@ -43,8 +44,9 @@ Recovery does **not** rely on a single mechanism:
    - Plex answers `HTTP 200` on `http://127.0.0.1:32400/identity` (no auth).
 
    If either check fails, it restarts Plex via `systemctl --user restart
-   plex.service`, waits up to ~60 s for it to respond, then appends one line to
-   the report log.
+   plex.service`, waits up to ~120 s for it to respond, then appends one line to
+   the report log. Concurrent runs are serialised by a lock, so a slow run never
+   leaves a queued job that fires a competing restart.
 
 ```mermaid
 flowchart LR
@@ -53,7 +55,7 @@ flowchart LR
   Timer["Health-check timer<br/>every 5 min"] --> Chk{"running AND<br/>/identity = 200?"}
   Chk -- yes --> OK["healthy — no action,<br/>nothing logged"]
   Chk -- "no (e.g. hung)" --> R["systemctl --user<br/>restart plex.service"]
-  R --> Wait{"responds<br/>within ~60s?"}
+  R --> Wait{"responds<br/>within ~120s?"}
   Wait -- yes --> Rec["log RECOVERED"]
   Wait -- no --> Fail["log FAILED-RECOVERY"]
 ```
@@ -103,8 +105,9 @@ entry is `key=value`:
 2026-06-27 18:23:10 +0100  RESET  result=RECOVERED  reason="container 'plex' not running"  attempts=4  duration=18s  host=KoolApps
 ```
 
-`result` is one of `RECOVERED`, `FAILED-RECOVERY`, or `FAILED-RESTART`. The monthly
-clear truncates the file to its header plus a `# Cleared: <timestamp>` line.
+`result` is one of `RECOVERED`, `RECOVERED-AFTER-FAILED-RESTART`,
+`FAILED-RECOVERY`, or `FAILED-RESTART`. The monthly clear truncates the file to
+its header plus a `# Cleared: <timestamp>` line.
 
 ## Common operations
 ```bash

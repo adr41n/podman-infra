@@ -14,6 +14,7 @@
 !/README.md
 !/PLEX-HEALTHCHECK.md
 !/plex-healthcheck.sh
+!/plex-healthcheck.service.example
 !/plex-report-clear.sh
 !/test-cron-jobs.sh
 
