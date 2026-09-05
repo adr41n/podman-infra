@@ -32,19 +32,29 @@ are true:
 2. Plex answers `HTTP 200` on `http://127.0.0.1:32400/identity` (no auth required).
 
 If either check fails, it restarts Plex and waits up to
-`POST_RESTART_RETRIES × POST_RESTART_DELAY` (default **60s**) for it to respond,
+`POST_RESTART_RETRIES × POST_RESTART_DELAY` (default **120s**) for it to respond,
 then records the outcome to the report log.
+
+Runs are serialised by a non-blocking `flock` on `$XDG_RUNTIME_DIR/plex-healthcheck.lock`.
+If a previous run is still going, the new one logs and exits `0` without acting —
+see the 2026-09-05 note below for why this matters.
 
 ```mermaid
 flowchart TD
-  A[Timer fires every 5 min] --> B{Container running?}
-  B -- no --> R[Restart Plex]
+  A[Timer fires every 5 min] --> L{Another run in progress?}
+  L -- yes --> SKIP[Exit 0: skip, no action]
+  L -- no --> B{Container running?}
+  B -- no --> R[Restart via systemd]
   B -- yes --> C{/identity returns 200?}
   C -- yes --> OK[Exit 0: healthy, no report]
   C -- no --> R
-  R --> W{Responds within retries?}
+  R --> RC{Restart command succeeded?}
+  RC -- yes --> W{Responds within retries?}
+  RC -- no --> W2{Recovered anyway via Restart=always?}
   W -- yes --> REC[Report RECOVERED, exit 0]
   W -- no --> FAIL[Report FAILED-RECOVERY, exit 1]
+  W2 -- yes --> REC2[Report RECOVERED-AFTER-FAILED-RESTART, exit 0]
+  W2 -- no --> FAIL2[Report FAILED-RESTART, exit 1]
 ```
 
 ### Restarting the right way (important)
@@ -81,6 +91,34 @@ Recovery does not rely on the health-check alone:
 > recreated the container and `NRestarts` incremented (journal: `Scheduled
 > restart job, restart counter is at 1`).
 
+> **Fixed 2026-09-05:** an unresponsive Plex exposed two flaws in the
+> health-check itself. The Plex process wedged in uninterruptible sleep (D
+> state) and survived both `SIGTERM` and repeated `SIGKILL`, so
+> `systemctl --user restart plex.service` failed outright — journal showed
+> `given PID did not die within timeout`, `Processes still around after final
+> SIGKILL. Entering failed mode.` and `Failed to spawn executor: Device or
+> resource busy`. Two problems followed:
+>
+> 1. **False failure reports.** The script exited `1` with `FAILED-RESTART` the
+>    moment the restart command failed, without checking the actual outcome.
+>    Because the Quadlet unit is `Restart=always`, systemd brought Plex back
+>    ~10s later regardless — so a server that recovered was recorded as a failed
+>    reset (two such entries on 2026-09-05, at 19:47:04 and 19:48:54; Plex was
+>    up at 19:49:04). The script now waits for recovery on that path and reports
+>    `RECOVERED-AFTER-FAILED-RESTART`.
+> 2. **Restart storms.** `systemctl restart` blocked for 6m46s while the
+>    container was wedged. systemd queued the next timer job, which fired a
+>    second, competing restart the instant the first returned — interrupting an
+>    in-progress start and prolonging the outage. Runs are now serialised with a
+>    non-blocking `flock`.
+>
+> Also hardened: the restart command is bounded by `timeout`
+> (`PLEX_RESTART_TIMEOUT`, default 150s), the recovery window was doubled to
+> 120s, and `TimeoutStartSec=600` added to `plex-healthcheck.service` as an
+> outer backstop. Note the trigger was load-induced, not a Plex defect: a
+> full library scan had queued chapter-thumbnail generation, saturating I/O on
+> the storage array.
+
 ## Schedules
 
 | Timer | Schedule | `OnCalendar` |
@@ -104,8 +142,11 @@ its play-by-play goes to the journal instead). Each entry is `key=value`:
 `result` is one of:
 
 - `RECOVERED` — restarted and Plex came back.
+- `RECOVERED-AFTER-FAILED-RESTART` — the restart command failed, but Plex came
+  back anyway (systemd's `Restart=always` won the race). Not an error, though
+  worth investigating why the restart command failed.
 - `FAILED-RECOVERY` — restarted but still not responding within the retry window.
-- `FAILED-RESTART` — the restart command itself failed.
+- `FAILED-RESTART` — the restart command failed *and* Plex did not recover.
 
 The monthly clear truncates this file to just its header plus a `# Cleared: <timestamp>` line.
 
@@ -121,8 +162,10 @@ All settings are environment-variable overrides; defaults work for this host.
 | `PLEX_HOST` | `127.0.0.1` | Host for the health probe. |
 | `PLEX_PORT` | `32400` | Plex port. |
 | `CURL_TIMEOUT` | `10` | Seconds per health request. |
-| `POST_RESTART_RETRIES` | `12` | Probe attempts after a restart. |
+| `POST_RESTART_RETRIES` | `24` | Probe attempts after a restart. |
 | `POST_RESTART_DELAY` | `5` | Seconds between attempts. |
+| `PLEX_RESTART_TIMEOUT` | `150` | Max seconds for the restart command before giving up on it. |
+| `PLEX_HEALTH_LOCK` | `$XDG_RUNTIME_DIR/plex-healthcheck.lock` | Lock file serialising concurrent runs. |
 | `PLEX_HEALTH_LOG` | _(empty)_ | Optional extra log file; empty = stdout/journal only. |
 | `PLEX_HEALTH_REPORT` | `~/Podman/plex-healthcheck-report.log` | Report log path. |
 | `PLEX_RESTART_MODE` | `auto` | `auto` \| `systemd` \| `podman`. |
@@ -184,6 +227,15 @@ systemctl --user daemon-reload
   `Restart=always`. If not, check the `[Service]` section of `plex.container`
   (it must be a systemd value, *not* `unless-stopped`) and run
   `systemctl --user daemon-reload`.
+- **Container stuck `stopping`; Plex will not die.** If the journal shows
+  `given PID did not die within timeout` or `Processes still around after final
+  SIGKILL`, the Plex process is in uninterruptible sleep (D state), blocked in a
+  kernel I/O call — typically heavy background work such as chapter-thumbnail
+  generation against slow storage. Neither systemd nor podman can kill a D-state
+  process; it clears only once the I/O completes. Let `Restart=always` recreate
+  the container rather than issuing further restarts, which merely compete with
+  the recovery. To reduce recurrence, disable chapter thumbnail generation in
+  Plex's settings (Settings → Library).
 
 ## Uninstall
 

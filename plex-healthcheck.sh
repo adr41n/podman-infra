@@ -28,8 +28,16 @@ PLEX_HOST="${PLEX_HOST:-127.0.0.1}"
 PLEX_PORT="${PLEX_PORT:-32400}"
 HEALTH_PATH="/identity"                                # 200 + XML, no auth
 CURL_TIMEOUT="${CURL_TIMEOUT:-10}"                     # seconds per request
-POST_RESTART_RETRIES="${POST_RESTART_RETRIES:-12}"     # attempts after restart
+POST_RESTART_RETRIES="${POST_RESTART_RETRIES:-24}"     # attempts after restart
 POST_RESTART_DELAY="${POST_RESTART_DELAY:-5}"          # seconds between attempts
+# Bound the restart command. 'systemctl restart' blocks until the unit's stop
+# and start settle; if the container is wedged in uninterruptible I/O that can
+# exceed TimeoutStopSec and hold this script for many minutes.
+RESTART_TIMEOUT="${PLEX_RESTART_TIMEOUT:-150}"         # max seconds for the restart command
+# Guard against overlapping runs. systemd queues timer jobs, so a slow run
+# leaves a backlog that fires a second restart while the first is still
+# recovering - which prolongs the outage instead of shortening it.
+LOCK_FILE="${PLEX_HEALTH_LOCK:-${XDG_RUNTIME_DIR:-/tmp}/plex-healthcheck.lock}"
 LOG_FILE="${PLEX_HEALTH_LOG:-}"                        # optional; empty = stdout
 # Report file: a line is appended ONLY when Plex has to be reset (restarted).
 REPORT_FILE="${PLEX_HEALTH_REPORT:-$HOME/Podman/plex-healthcheck-report.log}"
@@ -102,7 +110,7 @@ restart_plex() {
     # 'podman restart' fails once the container is gone; restart via systemd.
     if [ "$RESTART_MODE" = "systemd" ] || { [ "$RESTART_MODE" = "auto" ] && unit_exists; }; then
         log "Restarting via systemd unit '${SYSTEMD_UNIT}' (systemctl ${SYSTEMCTL_SCOPE})..."
-        if systemctl "${SYSTEMCTL_SCOPE_ARR[@]}" restart "$SYSTEMD_UNIT"; then
+        if timeout "$RESTART_TIMEOUT" systemctl "${SYSTEMCTL_SCOPE_ARR[@]}" restart "$SYSTEMD_UNIT"; then
             log "systemctl restart issued for '${SYSTEMD_UNIT}'."
             return 0
         fi
@@ -141,6 +149,15 @@ wait_for_recovery() {
 main() {
     require_podman
 
+    # Only one run at a time. Without this, a slow run causes systemd to queue
+    # the next timer job, which then issues a competing restart the moment the
+    # first finishes - interrupting an in-progress recovery.
+    exec 9>"$LOCK_FILE" || { log "ERROR: cannot open lock file ${LOCK_FILE}."; exit 2; }
+    if ! flock -n 9; then
+        log "Another health check run is already in progress; skipping this run."
+        exit 0
+    fi
+
     if container_running && plex_responding; then
         log "OK: '${CONTAINER_NAME}' running and Plex responding at ${PLEX_URL}."
         exit 0
@@ -156,7 +173,17 @@ main() {
 
     local start=$SECONDS
     if ! restart_plex; then
-        report "FAILED-RESTART" "$reason" "0" "$(( SECONDS - start ))"
+        # A failed restart command does NOT mean Plex stays down. plex.service
+        # is Restart=always, so systemd brings it back once the old process
+        # finally dies. Confirm the actual outcome before declaring failure,
+        # otherwise a recovered server is reported as a failed reset.
+        log "WARN: restart command failed; waiting to see whether systemd recovers Plex anyway..."
+        if wait_for_recovery; then
+            log "OK: Plex recovered despite the failed restart command."
+            report "RECOVERED-AFTER-FAILED-RESTART" "$reason" "$RECOVERY_ATTEMPTS" "$(( SECONDS - start ))"
+            exit 0
+        fi
+        report "FAILED-RESTART" "$reason" "$RECOVERY_ATTEMPTS" "$(( SECONDS - start ))"
         exit 1
     fi
 
