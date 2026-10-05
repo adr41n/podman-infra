@@ -1,15 +1,17 @@
-# Homelab Services — OpenClaw, Pi-hole & Unbound (Rootless Podman)
+# Homelab Services — Rootless Podman Deployment Reference
 
-Deployment reference for three rootless-[Podman](https://podman.io/) services running on
-this host, each managed as a **systemd Quadlet** unit: **OpenClaw** (personal AI
-gateway), **Pi-hole** (DNS ad-blocker + web UI), and **Unbound** (recursive DNS
-resolver, Pi-hole's upstream).
+Deployment reference for this host's rootless-[Podman](https://podman.io/)
+containers, covering **OpenClaw** (personal AI gateway), **Pi-hole** (DNS
+ad-blocker + web UI), **Unbound** (recursive DNS resolver, Pi-hole's
+upstream), **Dispatcharr**, and the auto-start/auto-update configuration
+shared by every container on the host (11 total, across two systemd user
+instances).
 
 Pi-hole and Unbound live in their own separate repository, with the full
 reference (prerequisites, migration notes, troubleshooting) at
 [`adr41n/PiHole` — `README.md`](https://github.com/adr41n/PiHole/blob/master/README.md).
-This document summarizes all three services and gives OpenClaw its primary
-deployment record.
+This document summarizes those two plus Dispatcharr, and gives OpenClaw its
+primary deployment record.
 
 ## Overview
 
@@ -18,12 +20,56 @@ deployment record.
 | OpenClaw | `localhost/openclaw:local` (built from source) | `openclaw` | dedicated `openclaw` user (uid 1001) | 18789 (gateway/dashboard), 18790 (bridge) |
 | Pi-hole | `docker.io/pihole/pihole:latest` | `pihole` | `adrian` | 53 (DNS), 1000 (web UI HTTP), 443 (web UI HTTPS) |
 | Unbound | `docker.io/klutchell/unbound:latest` | `unbound` | `adrian` | 5335 (recursive resolver, Pi-hole upstream) |
+| Dispatcharr | `ghcr.io/dispatcharr/dispatcharr:latest` | `dispatcharr` | `adrian` (via podman-compose) | 9191 |
+| homeassistant, mosquitto, nodered, plex, rustdesk-hbbr, rustdesk-hbbs, syncthing | various | same names | `adrian` | see each Quadlet |
 
-All three are installed as Podman Quadlet `.container` files under
+All Quadlet-managed containers are installed as `.container` files under
 `~/.config/containers/systemd/` for their respective user, managed via the
 systemd **user** instance (`systemctl --user` or
 `systemctl --machine <user>@ --user` for the dedicated `openclaw` user), with
-lingering enabled so they start without an active login session.
+lingering enabled for both `adrian` and `openclaw` so everything starts
+without an active login session.
+
+## Auto-Start & Auto-Update (All Containers)
+
+**Auto-start:** every container's Quadlet (or, for Dispatcharr, its
+`dispatcharr-compose.service`) has `[Install] WantedBy=default.target`, so
+the systemd generator starts it at boot/login automatically — no manual
+`systemctl enable` needed (and doesn't apply to quadlet-generated units
+anyway; they're transient).
+
+**Auto-update** uses two different mechanisms depending on where the image
+comes from:
+
+| Mechanism | Covers | Schedule | How it works |
+| --- | --- | --- | --- |
+| `podman-auto-update.timer` (built-in, `adrian`'s systemd user instance) | homeassistant, mosquitto, nodered, pihole, plex, rustdesk-hbbr, rustdesk-hbbs, syncthing, unbound, **dispatcharr** (9 Quadlets + 1 compose container) | Daily, ~00:07 | Each container has label `io.containers.autoupdate=registry`; the timer checks the registry for a newer digest and recreates the container in place if found. |
+| `openclaw-update.timer` (custom, system-level) | openclaw only | Weekly, Sun ~04:30 | `openclaw:local` is **built from source**, not pulled from a registry, so the built-in mechanism can't apply. See [OpenClaw § Auto-update](#auto-update-pipeline) below for the dedicated pipeline. |
+
+Dispatcharr originally had **no** `io.containers.autoupdate` label at all
+(podman-compose doesn't set one by default), so the timer silently skipped
+it. Fixed by adding `labels: ["io.containers.autoupdate=registry"]` to
+`Dispatcher/docker-compose.yml` and recreating the container.
+
+### Verifying auto-update is working
+```bash
+# Confirm every adrian-managed container has the label
+for c in homeassistant mosquitto nodered pihole plex hbbr hbbs Syncthing unbound dispatcharr; do
+  echo -n "$c: "; podman inspect "$c" --format '{{index .Config.Labels "io.containers.autoupdate"}}'
+done
+
+# Timer schedule + last run
+systemctl --user list-timers podman-auto-update.timer
+journalctl --user -u podman-auto-update.service -n 30   # shows each container checked + whether it updated
+
+# OpenClaw's dedicated pipeline
+sudo systemctl list-timers openclaw-update.timer
+sudo cat /var/lib/openclaw-update/built.tag   # last successfully-deployed stable tag (absent if none yet)
+```
+Last verified (2026-10-05): all 9 Quadlet containers + dispatcharr carry the
+`registry` label and have been checked by `podman-auto-update.service` on 3
+consecutive daily runs (Oct 3–5). All 11 containers across both systemd user
+instances (`adrian`: 10, `openclaw`: 1) were confirmed running/healthy.
 
 ## OpenClaw
 
@@ -132,17 +178,7 @@ sudo systemctl --machine openclaw@ --user status openclaw.service
 sudo -u openclaw env XDG_RUNTIME_DIR=/run/user/1001 journalctl --user -u openclaw.service -f
 sudo -u openclaw env HOME=/home/openclaw podman logs -f openclaw
 
-# Restart
-sudo systemctl --machine openclaw@ --user restart openclaw.service
-
-# Rebuild image after a source update, then restart
-cd /KoolApps/OrgDisk/e47db547-25e1-4aa9-834c-7813afcde903/Docker/openclaw/openclaw
-git pull
-sudo podman build -t openclaw:local -f Dockerfile .
-TMP=$(mktemp -p /tmp openclaw-image.XXXXXX.tar)
-sudo podman save openclaw:local -o "$TMP" && sudo chmod 644 "$TMP"
-sudo -u openclaw env HOME=/home/openclaw podman load -i "$TMP"
-sudo rm -f "$TMP"
+# Restart (no rebuild)
 sudo systemctl --machine openclaw@ --user restart openclaw.service
 ```
 
@@ -150,6 +186,65 @@ Note: cold start takes roughly a minute (Node/Bun dependency loading) before
 the gateway logs "listening on ws://0.0.0.0:18789" — don't assume it has
 failed if the dashboard isn't reachable within the first ~60 seconds of a
 restart.
+
+### Auto-update pipeline
+Since `openclaw:local` is built from source (not pulled from a registry),
+Podman's built-in `AutoUpdate=registry` label mechanism can't detect or apply
+upstream updates for it. A dedicated pipeline handles this instead:
+
+| Component | Path | Purpose |
+| --- | --- | --- |
+| `openclaw-update.sh` | `/usr/local/sbin/openclaw-update.sh` | Root-run script: fetch tags → build → load → restart → health-check → rollback-on-failure |
+| `openclaw-update.service` + `.timer` | `/etc/systemd/system/` | System-level (not user) oneshot + weekly timer (Sun ~04:30, `TimeoutStartSec=infinity`) |
+| Build clone | `/var/lib/openclaw-update/src` | **Isolated** clone, separate from the interactive dev checkout — the script must never mutate that checkout's branch/HEAD since it may be in active use when the timer fires |
+| Marker files | `/var/lib/openclaw-update/built.{rev,tag}` | Last **successfully health-checked** commit/tag (only written after a passing health check, not merely after a successful build) |
+
+Key design points, each added after hitting a real failure during setup:
+- **Tracks the latest stable release tag** (`vYYYY.M.D`, via
+  `git tag --sort=-v:refname`), not the moving `main` branch — jumping
+  straight to `main` HEAD risks landing on a commit that requires a staged
+  data migration the current deployment hasn't gone through yet.
+- **Health check is real HTTP + the correct restart counter**: it curls the
+  dashboard URL and checks systemd's `NRestarts` (`systemctl ... show -p
+  NRestarts`) — **not** `podman inspect --format {{.RestartCount}}`, which is
+  always `0` here regardless of crash-looping, because the Quadlet uses `--rm`
+  + `Restart=on-failure`, so every crash creates a brand-new container rather
+  than incrementing podman's own counter.
+- **Automatic rollback on failure**: if the dashboard doesn't respond, or the
+  restart count climbs, within the check+settle window, the script re-tags
+  the previous image back to `openclaw:local`, restarts, and exits non-zero
+  without updating the marker — so a failed run is retried on the next
+  scheduled timer, and the gateway is never left down overnight unattended.
+
+#### Known incident: staged-migration guard (2026-10-05)
+The first real update attempt (tag `v2026.9.8`) failed to start against the
+existing deployment (originally `v2026.2.23`), surfacing two guards in
+sequence:
+1. `Cron state: retired files whose last writer predates July 1, 2026: .../cron/jobs.json ... Upgrade through OpenClaw 2026.9.7, run "openclaw doctor --fix" on the original host, then retry this upgrade.`
+2. After working around the first by inspecting manually: `StartupMaintenanceRequiredError: ... Legacy workspace setup state requires migration at .../workspace-state.json.`
+
+The automatic rollback caught both and restored service each time — but
+**advancing the actual deployed version still requires manual intervention**:
+follow the staged-upgrade instructions in the error message (intermediate
+version + `openclaw doctor --fix`) before the automated pipeline can carry it
+the rest of the way. Check `sudo journalctl -u openclaw-update.service` and
+`sudo -u openclaw env HOME=/home/openclaw podman logs openclaw` for the exact
+guard message if a scheduled run ever reports failure.
+
+#### Manual commands
+```bash
+# Trigger an update check immediately instead of waiting for the timer
+sudo systemctl start openclaw-update.service
+sudo journalctl -u openclaw-update.service -f
+
+# Check what's currently deployed vs. the latest available stable tag
+sudo cat /var/lib/openclaw-update/built.tag
+cd /var/lib/openclaw-update/src && sudo git tag --list 'v*' --sort=-v:refname | head -5
+
+# Disable/re-enable the automated pipeline
+sudo systemctl disable --now openclaw-update.timer
+sudo systemctl enable --now openclaw-update.timer
+```
 
 ## Pi-hole & Unbound (summary)
 
