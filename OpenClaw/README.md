@@ -5,10 +5,11 @@ this host, each managed as a **systemd Quadlet** unit: **OpenClaw** (personal AI
 gateway), **Pi-hole** (DNS ad-blocker + web UI), and **Unbound** (recursive DNS
 resolver, Pi-hole's upstream).
 
-Pi-hole and Unbound have their own full reference at
-[`../PiHole/README.md`](../PiHole/README.md) (prerequisites, migration notes,
-troubleshooting). This document summarizes all three services and gives OpenClaw
-its primary deployment record.
+Pi-hole and Unbound live in their own separate repository, with the full
+reference (prerequisites, migration notes, troubleshooting) at
+[`adr41n/PiHole` — `README.md`](https://github.com/adr41n/PiHole/blob/master/README.md).
+This document summarizes all three services and gives OpenClaw its primary
+deployment record.
 
 ## Overview
 
@@ -152,7 +153,8 @@ restart.
 
 ## Pi-hole & Unbound (summary)
 
-Full reference: [`../PiHole/README.md`](../PiHole/README.md).
+Full reference: [`adr41n/PiHole` — `README.md`](https://github.com/adr41n/PiHole/blob/master/README.md)
+(separate repository, not part of `podman-infra`).
 
 - **Pi-hole** filters DNS and serves the admin web UI; **Unbound** runs as a
   separate container providing recursive, DNSSEC-validated resolution on
