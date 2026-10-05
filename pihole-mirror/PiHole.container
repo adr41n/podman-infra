@@ -1,0 +1,82 @@
+# Pi-hole v6 via Podman Quadlet (systemd) — ROOTLESS
+#
+# Official pihole/pihole v6 image. Unbound runs as a separate rootless service
+# (Unbound.container) providing recursive resolution on 127.0.0.1:5335.
+#
+# Install (rootless):
+#   cp Unbound.container PiHole.container ~/.config/containers/systemd/
+#   systemctl --user daemon-reload
+#   systemctl --user start Unbound
+#   systemctl --user start PiHole
+#
+# Logs:   journalctl --user -u PiHole -f   (or: podman logs -f pihole)
+# Stop:   systemctl --user stop PiHole
+#
+# To survive logout/reboot without an active session:
+#   loginctl enable-linger $USER
+#
+# Privileged ports: rootless Podman cannot bind ports < 1024 by default, and
+# this container binds 53 (DNS) and 443 (HTTPS) via host networking. Lower the
+# threshold once on the host so an unprivileged user may bind them:
+#   echo 'net.ipv4.ip_unprivileged_port_start=53' | sudo tee /etc/sysctl.d/99-rootless-pihole.conf
+#   sudo sysctl --system
+
+[Unit]
+Description=PiHole v6 DNS Ad-Blocker (Unbound upstream)
+After=network-online.target Unbound.service
+Wants=network-online.target
+Requires=Unbound.service
+
+[Container]
+Image=docker.io/pihole/pihole:latest
+ContainerName=pihole
+HostName=pihole
+AutoUpdate=registry
+
+# Host networking: pihole-FTL binds the host ports directly (53 DNS, 1000 web
+# UI, 443 HTTPS). Rootless pasta port publishing does not reliably forward
+# host-originated DNS traffic, and host networking lets FTL reach Unbound on
+# the loopback (127.0.0.1#5335).
+Network=host
+
+# Load secrets / environment-specific values (.env file): TZ,
+# FTLCONF_webserver_api_password, FTLCONF_dns_revServers, FTLCONF_dns_domain.
+EnvironmentFile=/home/adrian/Podman/PiHole/.env
+
+# Upstream: the co-located Unbound recursive resolver.
+Environment=FTLCONF_dns_upstreams=127.0.0.1#5335
+# Unbound already performs DNSSEC validation; disable it here to avoid
+# double validation.
+Environment=FTLCONF_dns_dnssec=false
+
+# Bind DNS to the LAN interface only. listeningMode=BIND uses bind-interfaces
+# semantics so FTL binds bond0's addresses instead of the wildcard 0.0.0.0:53,
+# avoiding a port-53 conflict with other host DNS listeners (e.g. libvirt's
+# dnsmasq on 192.168.122.1:53) and keeping DNS off loopback/VPN interfaces.
+Environment=FTLCONF_dns_interface=bond0
+Environment=FTLCONF_dns_listeningMode=BIND
+
+# Web UI on :1000 (HTTP) and :443 (HTTPS, self-signed). v6 has no port remap,
+# so the listening port is set directly (replaces the old 1000:80 mapping).
+# Bound explicitly to bond0's static IP (192.168.0.5) rather than the
+# wildcard address: Tailscale Funnel already holds a specific bind on
+# 100.84.197.119:443 (tailscale0) for Plex, and civetweb's wildcard
+# 0.0.0.0:443 bind fails with "Address in use" alongside it. Binding to a
+# distinct specific address avoids the collision, mirroring the DNS
+# interface scoping above.
+Environment=FTLCONF_webserver_port=192.168.0.5:1000,192.168.0.5:443s
+
+# Read legacy /etc/dnsmasq.d files for a complete v5 -> v6 migration on first
+# boot. Safe to set to false (and unmount the volume) after migration.
+Environment=FTLCONF_misc_etc_dnsmasq_d=true
+
+# Persistent storage
+Volume=/home/adrian/Podman/PiHole/etc-pihole:/etc/pihole:rw
+Volume=/home/adrian/Podman/PiHole/etc-dnsmasq.d:/etc/dnsmasq.d:rw
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

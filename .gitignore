@@ -47,3 +47,20 @@
 !/OpenClaw/
 /OpenClaw/*
 !/OpenClaw/README.md
+
+# Allow descending into pihole-mirror/ to mirror the Quadlet configs, Unbound
+# config, and .env template from the canonical adr41n/PiHole repo. Named
+# differently from "PiHole/" because that exact path on this host is already
+# the canonical repo's own clone (separate .git) -- see
+# pihole-mirror/README.md for the canonical source. Live data
+# (etc-pihole/, etc-dnsmasq.d/), the real .env secret, and the chkport binary
+# are never mirrored here.
+!/pihole-mirror/
+/pihole-mirror/*
+!/pihole-mirror/README.md
+!/pihole-mirror/PiHole.container
+!/pihole-mirror/Unbound.container
+!/pihole-mirror/.env.example
+!/pihole-mirror/unbound/
+/pihole-mirror/unbound/*
+!/pihole-mirror/unbound/pi-hole.conf

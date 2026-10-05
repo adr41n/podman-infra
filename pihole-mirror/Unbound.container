@@ -1,0 +1,50 @@
+# Unbound recursive resolver via Podman Quadlet (systemd) — ROOTLESS
+#
+# Upstream recursive DNS resolver for Pi-hole, using the actively maintained,
+# distroless klutchell/unbound image. It runs as a separate rootless user
+# service and listens on 0.0.0.0:5335 (see unbound/pi-hole.conf), so Pi-hole
+# (host networking) reaches it as upstream 127.0.0.1#5335.
+#
+# Install (rootless):
+#   cp Unbound.container ~/.config/containers/systemd/
+#   systemctl --user daemon-reload
+#   systemctl --user start Unbound
+#
+# Logs:   journalctl --user -u Unbound -f   (or: podman logs -f unbound)
+
+[Unit]
+Description=Unbound recursive DNS resolver (Pi-hole upstream)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/klutchell/unbound:latest
+ContainerName=unbound
+HostName=unbound
+AutoUpdate=registry
+
+# Host networking: bind 0.0.0.0:5335 directly on the host so Pi-hole can use it
+# as a loopback upstream (127.0.0.1#5335) without rootless port-forwarding
+# (pasta). The base image's access-control only allows local/LAN ranges.
+Network=host
+
+# Custom config drop-in directory (loaded via include-toplevel by the image's
+# default unbound.conf). Only overrides the listening port to 5335.
+Volume=/home/adrian/Podman/PiHole/unbound:/etc/unbound/custom.conf.d:ro
+
+# HealthCmd must use the JSON-array (exec) form: klutchell/unbound is a
+# minimal/distroless image with no /bin/sh, and podman's default plain-string
+# form always runs the command via "/bin/sh -c", which fails immediately
+# (exit 1, no output) since there is no shell to exec.
+HealthCmd=["/usr/bin/drill", "-p", "5335", "@127.0.0.1", "dnssec.works"]
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=30s
+
+[Service]
+Restart=always
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target
