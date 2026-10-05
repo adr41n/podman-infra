@@ -40,3 +40,10 @@
 /Dispatcher/*
 !/Dispatcher/docker-compose.yml
 !/Dispatcher/dispatcharr-compose.service.example
+
+# Allow descending into OpenClaw/ to track the deployment README only.
+# OpenClaw itself (source, image, live config) lives elsewhere; this directory
+# only holds documentation for the rootless-Podman deployment.
+!/OpenClaw/
+/OpenClaw/*
+!/OpenClaw/README.md
