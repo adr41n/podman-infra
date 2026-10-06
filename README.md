@@ -1,12 +1,23 @@
-# Podman Plex — Health-Check & Auto-Restart
+# podman-infra — Homelab Rootless Podman Infrastructure
 
-Automation that keeps the rootless-[Podman](https://podman.io/) **Plex Media Server**
-container (`plex`) running on this host: it recovers Plex automatically when the
-container stops **or** stops responding, and logs every recovery.
+This repository tracks the rootless-[Podman](https://podman.io/) infrastructure
+running on this host: Quadlet unit templates, compose files, and operational
+automation for every container service, plus cron jobs that round out the
+homelab's scheduled maintenance.
 
-This README focuses on the **automation** and the **recovery process**. The full
-reference — every configuration variable, troubleshooting, and uninstall steps —
-is in [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md).
+## Repository contents
+| Directory / doc | Covers |
+| --- | --- |
+| This file + [`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md) | **Plex**: health-check/auto-restart automation (this README's main focus, below) |
+| [`OpenClaw/README.md`](./OpenClaw/README.md) | **OpenClaw** full deployment record, plus the **auto-start/auto-update architecture shared by every container on the host** (built-in registry-based timer + OpenClaw's own source-build pipeline) and Podman store cleanup procedures |
+| [`Dispatcher/`](./Dispatcher/) | Dispatcharr compose file + systemd service template |
+| [`pihole-mirror/`](./pihole-mirror/) | Mirrored Pi-hole/Unbound Quadlet configs (canonical source: separate [`adr41n/PiHole`](https://github.com/adr41n/PiHole) repo) |
+| [`Plex/`](./Plex/) | Sanitized Plex Quadlet template |
+
+The rest of this README focuses on the **Plex automation and recovery
+process** specifically. The full Plex reference — every configuration
+variable, troubleshooting, and uninstall steps — is in
+[`PLEX-HEALTHCHECK.md`](./PLEX-HEALTHCHECK.md).
 
 ## Getting Started
 1. **Clone** this repo: `git clone https://github.com/adr41n/podman-plex-healthcheck.git`
@@ -152,6 +163,53 @@ systemctl --user start plex
 ```
 
 After any later edit to the live unit, re-run `systemctl --user daemon-reload`.
+
+## Maintenance: Podman store cleanup
+Repeated image builds (OpenClaw's source-build pipeline is the main offender —
+see [`OpenClaw/README.md`](./OpenClaw/README.md#auto-update-pipeline)) leave
+behind dangling images, intermediate build layers, and occasionally orphaned
+`buildah` scratch directories if a build is killed (e.g. by a timeout) before
+it finishes cleaning up after itself. None of this is tracked by git, but it's
+documented here since it's a recurring operational task across every service
+in this repo, not just OpenClaw.
+
+This host runs rootless Podman under **three separate storage namespaces**:
+`adrian` (most containers), `openclaw` (the OpenClaw container), and `root`
+(build-only — used transiently by OpenClaw's update pipeline to run `podman
+build`, never runs a container itself).
+
+```bash
+# Check reclaimable space in each store before cleaning
+podman system df                                               # adrian
+sudo -u openclaw env HOME=/home/openclaw podman system df      # openclaw
+sudo podman system df                                          # root (build-only)
+
+# adrian + openclaw: prune dangling images only (never touches in-use/tagged images)
+podman image prune -f
+sudo -u openclaw env HOME=/home/openclaw podman image prune -f
+
+# root: safe to prune ALL unused images (-a), since root never runs a
+# container — anything in its store is leftover build cache/layers
+sudo podman system prune -a -f
+
+# Orphaned buildah scratch dirs from a killed/interrupted build (rare; only
+# happens if a build is SIGTERM'd mid-way). Confirm no build is in progress
+# first (a bare `pgrep buildah` with no match, or `podman|buildah` matching
+# only `conmon` entries for already-running containers is fine):
+pgrep -fa 'podman|buildah'
+sudo rm -rf /var/tmp/buildah-cache-0 /var/tmp/buildah<random-suffix>
+```
+
+**Never delete** `/var/lib/openclaw-update/src` — it's OpenClaw's persistent
+build clone (deliberately isolated from the interactive dev checkout), not a
+temporary artifact; removing it just forces a full re-clone on the next
+scheduled update run for no benefit.
+
+After any cleanup, verify nothing running was affected:
+```bash
+podman ps -a --format "table {{.Names}}\t{{.Status}}"
+sudo -u openclaw env HOME=/home/openclaw podman ps -a --format "table {{.Names}}\t{{.Status}}"
+```
 
 ## License
 Released under the [MIT License](./LICENSE) © 2026 adr41n.
