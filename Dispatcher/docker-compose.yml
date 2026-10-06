@@ -6,6 +6,8 @@ services:
     image: ghcr.io/dispatcharr/dispatcharr:latest
     restart: unless-stopped
     container_name: dispatcharr
+    labels:
+      - "io.containers.autoupdate=registry"
     ports:
       - 9191:9191
     volumes:
